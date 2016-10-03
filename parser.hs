@@ -3,6 +3,7 @@ module Main where
 import System.IO
 import Control.Monad
 import Control.Applicative((<*))
+import Text.Parsec.Char
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Expr
 import Text.ParserCombinators.Parsec.Language
@@ -58,8 +59,9 @@ data Stmt = Assign Expr Expr  -- First Expr can only be a Var, not sure best way
           | If Expr Stmt
           | IfElse Expr Stmt Stmt
           | While Expr Stmt
-          | DoWhile Expr Stmt
+          | DoWhile Stmt Expr
           | For (Maybe Stmt) (Maybe Expr) (Maybe Stmt) Stmt 
+          | Return Expr
           | Skip
           deriving (Eq, Show)
 
@@ -74,19 +76,11 @@ languageDef =
              , Token.reservedNames   = [ "if"
                                        , "else"
                                        , "return"
-                                       , "switch"
-                                       , "case"
-                                       , "default"
                                        , "while"
                                        , "do"
                                        , "for"
                                        , "break"
                                        , "skip"  -- continue
-                                       , "true"
-                                       , "false"
-                                       , "not"
-                                       , "and"
-                                       , "or"
                                        , "func"
                                        , "class"
                                        , "new"
@@ -99,6 +93,7 @@ languageDef =
                                        , "volatile"  -- might need^^^
                                        , "null"
                                        , "typedef"  -- Probably going to need variadic...
+                                       , "import"
                                        ]
              , Token.reservedOpNames = ["+", "-", "*", "/", "="  -- Need opStart/opLetter?  Missing any?
                                        , "&", "|", "^", "!", "~"
@@ -164,7 +159,7 @@ operators = [
 
               , [ Infix (reservedOp' "|"  >> return (Binary AOr)) AssocLeft ]
 
-              -- , [ Infix (reservedOp "="  >> identifier >>  return (Binary Asn)) AssocLeft ]
+              --, [ Infix (reservedOp "="  >>  return (Binary Asn)) AssocLeft ]
             ]
 
 expression :: Parser Expr
@@ -185,14 +180,16 @@ statement =  parens statement
 
 sequenceOfStmt :: Parser Stmt 
 sequenceOfStmt = do 
-    list <- endBy1 statement' semi  -- Currently splitting by semicolons ^^^, probably should do by newline
+    list <- endBy1 statement' (oneOf "\n;")  -- Would prefer to apply the newline or semi parsers ^^^
     return $ foldr1 Semi list
 
 statement' :: Parser Stmt
-statement' = try assignStmt
+statement' =  try assignStmt
           <|> try ifElseStmt  -- Have to try this first, otherwise a full if statement would be parsed
-          <|> try ifStmt  -- should switch, or at least use try (ambiguous start with assignStmt)
-          <|> try forStmt
+          <|> ifStmt  -- should switch, or at least use try (ambiguous start with assignStmt)
+          <|> whileStmt
+          <|> doWhileStmt
+          <|> forStmt
 
 -- We treat assignment as a statement to avoid =/== errors in conditionals
 assignStmt :: Parser Stmt
@@ -225,9 +222,16 @@ whileStmt = do
     stmt <- braces statement
     return $ If cond stmt
 
--- doWhile
 
--- This almost works, but it requires an extra semicolon after the incrementor
+doWhileStmt :: Parser Stmt
+doWhileStmt = do
+    reserved "do"
+    stmt <- braces statement
+    reserved "while"
+    cond <- parens expression
+    semi  -- need ; after while statement, i guess
+    return $ DoWhile stmt cond
+
 forStmt :: Parser Stmt
 forStmt = do
     reserved "for"
@@ -236,10 +240,16 @@ forStmt = do
     semi
     cond <- optionMaybe expression
     semi
-    inc <- optionMaybe statement   
+    inc <- optionMaybe statement'  -- statement' because it doesn't require semicolon at end.  Could make an argument for assignStmt, but what if you wanted to update with function?   
     char ')'
     stmt <- braces statement
     return $ For initial cond inc stmt
+ 
+returnStmt :: Parser Stmt
+returnStmt = do
+    reserved "return"
+    expr <- expression
+    return $ Return expr
 
 skipStmt :: Parser Stmt
 skipStmt = do
