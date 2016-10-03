@@ -59,7 +59,7 @@ data Stmt = Assign Expr Expr  -- First Expr can only be a Var, not sure best way
           | IfElse Expr Stmt Stmt
           | While Expr Stmt
           | DoWhile Expr Stmt
-          | For (Maybe Stmt) (Maybe Expr) (Maybe Expr) Stmt 
+          | For (Maybe Stmt) (Maybe Expr) (Maybe Stmt) Stmt 
           | Skip
           deriving (Eq, Show)
 
@@ -192,7 +192,7 @@ statement' :: Parser Stmt
 statement' = try assignStmt
           <|> try ifElseStmt  -- Have to try this first, otherwise a full if statement would be parsed
           <|> try ifStmt  -- should switch, or at least use try (ambiguous start with assignStmt)
-
+          <|> try forStmt
 
 -- We treat assignment as a statement to avoid =/== errors in conditionals
 assignStmt :: Parser Stmt
@@ -224,6 +224,22 @@ whileStmt = do
     cond <- parens expression
     stmt <- braces statement
     return $ If cond stmt
+
+-- doWhile
+
+-- This almost works, but it requires an extra semicolon after the incrementor
+forStmt :: Parser Stmt
+forStmt = do
+    reserved "for"
+    char '('
+    initial <- optionMaybe assignStmt
+    semi
+    cond <- optionMaybe expression
+    semi
+    inc <- optionMaybe statement   
+    char ')'
+    stmt <- braces statement
+    return $ For initial cond inc stmt
 
 skipStmt :: Parser Stmt
 skipStmt = do
