@@ -55,6 +55,11 @@ data Expr = IntConst Integer   -- Think at this stage I want to allow it to be a
 -- Gonna need separate declare??
 data Stmt = Assign Expr Expr  -- First Expr can only be a Var, not sure best way to enforce ^^^
           | Semi Stmt Stmt
+          | If Expr Stmt
+          | IfElse Expr Stmt Stmt
+          | While Expr Stmt
+          | DoWhile Expr Stmt
+          | For (Maybe Stmt) (Maybe Expr) (Maybe Expr) Stmt 
           | Skip
           deriving (Eq, Show)
 
@@ -98,8 +103,8 @@ languageDef =
              , Token.reservedOpNames = ["+", "-", "*", "/", "="  -- Need opStart/opLetter?  Missing any?
                                        , "&", "|", "^", "!", "~"
                                   	   , ">>", "<<"
-                                       , "<", ">", "<=", ">=", "~"                              
-                                       , "<", ">", "&&", "||", "!"  -- Need wayyy more: http://www.tutorialspoint.com/cprogramming/c_operators.htm
+                                       , "<", ">", "<=", ">="                            
+                                       , "&&", "||", "!"  -- Need wayyy more: http://www.tutorialspoint.com/cprogramming/c_operators.htm
                                        ]
              , caseSensitive         = True
              }
@@ -121,77 +126,109 @@ charLiteral   = Token.charLiteral   lexer
 stringLiteral = Token.stringLiteral lexer
 whiteSpace    = Token.whiteSpace    lexer
 
+reservedOp' name = try (string name >> whiteSpace)
+
 -- Copied from http://en.cppreference.com/w/c/language/operator_precedence where relevant
 operators = [
-                [ Prefix (reservedOp "~"  >> return (Unary ANot))
-                , Prefix (reservedOp "!"  >> return (Unary BNot)) ]
+                [ Prefix (reservedOp' "~"  >> return (Unary ANot))
+                , Prefix (reservedOp' "!"  >> return (Unary BNot)) ]
 
-              , [ Prefix (reservedOp "+"  >> return (Unary Pos))
-                , Prefix (reservedOp "-"  >> return (Unary Neg)) ]
+              , [ Prefix (reservedOp' "+"  >> return (Unary Pos))
+                , Prefix (reservedOp' "-"  >> return (Unary Neg)) ]
 
-              , [ Infix (reservedOp "*"  >> return (Binary Mul)) AssocLeft
-                , Infix (reservedOp "/"  >> return (Binary Div)) AssocLeft
-                , Infix (reservedOp "%"  >> return (Binary Mod)) AssocLeft ]
+              , [ Infix (reservedOp' "*"  >> return (Binary Mul)) AssocLeft
+                , Infix (reservedOp' "/"  >> return (Binary Div)) AssocLeft
+                , Infix (reservedOp' "%"  >> return (Binary Mod)) AssocLeft ]
 
-              , [ Infix (reservedOp "+"  >> return (Binary Add)) AssocLeft
-                , Infix (reservedOp "-"  >> return (Binary Sub)) AssocLeft ]
+              , [ Infix (reservedOp' "+"  >> return (Binary Add)) AssocLeft
+                , Infix (reservedOp' "-"  >> return (Binary Sub)) AssocLeft ]
 
-              , [ Infix (reservedOp ">>"  >> return (Binary Shr)) AssocLeft
-                , Infix (reservedOp "<<"  >> return (Binary Shl)) AssocLeft ]
+              , [ Infix (reservedOp' ">>"  >> return (Binary Shr)) AssocLeft
+                , Infix (reservedOp' "<<"  >> return (Binary Shl)) AssocLeft ]
 
-              , [ Infix (reservedOp "<"  >> return (Binary Less)) AssocLeft
-                , Infix (reservedOp ">"  >> return (Binary Grtr)) AssocLeft
-                , Infix (reservedOp "<="  >> return (Binary Gte)) AssocLeft
-                , Infix (reservedOp ">="  >> return (Binary Lte)) AssocLeft ]
+              , [ Infix (reservedOp' "<"  >> return (Binary Less)) AssocLeft
+                , Infix (reservedOp' ">"  >> return (Binary Grtr)) AssocLeft
+                , Infix (reservedOp' "<="  >> return (Binary Gte)) AssocLeft
+                , Infix (reservedOp' ">="  >> return (Binary Lte)) AssocLeft ]
 
-              , [ Infix (reservedOp "=="  >> return (Binary Eq)) AssocLeft  -- Maybe right ^^^
-                , Infix (reservedOp "!="  >> return (Binary Neq)) AssocLeft ]
+              , [ Infix (reservedOp' "=="  >> return (Binary Eq)) AssocLeft  -- Maybe right ^^^
+                , Infix (reservedOp' "!="  >> return (Binary Neq)) AssocLeft ]
 
-              , [ Infix (reservedOp "&"  >> return (Binary AAnd)) AssocLeft ]
+              , [ Infix (reservedOp' "&"  >> return (Binary AAnd)) AssocLeft ]
 
-              , [ Infix (reservedOp "&&"  >> return (Binary BAnd)) AssocLeft ]
+              , [ Infix (reservedOp' "&&"  >> return (Binary BAnd)) AssocLeft ]
 
-              , [ Infix (reservedOp "||"  >> return (Binary BOr)) AssocLeft ]
+              , [ Infix (reservedOp' "||"  >> return (Binary BOr)) AssocLeft ]
 
-              , [ Infix (reservedOp "^"  >> return (Binary AXor)) AssocLeft ]
+              , [ Infix (reservedOp' "^"  >> return (Binary AXor)) AssocLeft ]
 
-              , [ Infix (reservedOp "|"  >> return (Binary AOr)) AssocLeft ]
+              , [ Infix (reservedOp' "|"  >> return (Binary AOr)) AssocLeft ]
+
+              -- , [ Infix (reservedOp "="  >> identifier >>  return (Binary Asn)) AssocLeft ]
             ]
 
- --
 expression :: Parser Expr
 expression = buildExpressionParser operators term
 
 
 term :: Parser Expr
 term =  parens expression
-     <|> liftM Var identifier
-     <|> liftM IntConst integer
-     <|> liftM FloatConst float
+    <|> liftM Var identifier
+    <|> liftM IntConst integer
+    <|> liftM FloatConst float
      -- <|> liftM CharConst char  
 
 
 statement :: Parser Stmt
-statement =   parens statement
-          <|> sequenceOfStmt
+statement =  parens statement
+         <|> sequenceOfStmt
 
 sequenceOfStmt :: Parser Stmt 
 sequenceOfStmt = do 
-    list <- (endBy1 statement' semi)  -- Currently splitting by semicolons ^^^
-    return $ if length list == 1 then head list else foldr1 Semi list
+    list <- endBy1 statement' semi  -- Currently splitting by semicolons ^^^, probably should do by newline
+    return $ foldr1 Semi list
 
 statement' :: Parser Stmt
-statement' =   assignStmt  -- So far, just this ^^^
+statement' = try assignStmt
+          <|> try ifElseStmt  -- Have to try this first, otherwise a full if statement would be parsed
+          <|> try ifStmt  -- should switch, or at least use try (ambiguous start with assignStmt)
 
 
-
+-- We treat assignment as a statement to avoid =/== errors in conditionals
 assignStmt :: Parser Stmt
 assignStmt = do
     varName <- identifier
-    reservedOp "="
+    reservedOp' "="
     value <- expression
     return $ Assign (Var varName) value
 
+ifStmt :: Parser Stmt
+ifStmt = do
+    reserved "if"
+    cond <- parens expression
+    stmt <- braces statement
+    return $ If cond stmt
+
+ifElseStmt :: Parser Stmt
+ifElseStmt = do
+    reserved "if"
+    cond <- parens expression
+    passStmt <- braces statement
+    reserved "else"
+    failStmt <- braces statement
+    return $ IfElse cond passStmt failStmt
+
+whileStmt :: Parser Stmt
+whileStmt = do
+    reserved "while"
+    cond <- parens expression
+    stmt <- braces statement
+    return $ If cond stmt
+
+skipStmt :: Parser Stmt
+skipStmt = do
+    reserved "skip"
+    return Skip
 
 
 parser :: Parser Stmt
