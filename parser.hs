@@ -54,7 +54,7 @@ data Expr = IntConst Integer   -- Think at this stage I want to allow it to be a
 --         deriving (Eq, Show)
 
 -- Gonna need separate declare??
-data Stmt = Assign Expr Expr  -- First Expr can only be a Var, not sure best way to enforce ^^^
+data Stmt = Assign Expr  -- First Expr can only be a Var, not sure best way to enforce ^^^
           | Semi Stmt Stmt
           | If Expr Stmt
           | IfElse Expr Stmt Stmt
@@ -67,7 +67,7 @@ data Stmt = Assign Expr Expr  -- First Expr can only be a Var, not sure best way
 
 
 languageDef =
-	emptyDef   { Token.commentStart    = "/*"
+	emptyDef { Token.commentStart    = "/*"
              , Token.commentEnd      = "*/"
              , Token.commentLine     = "//"
              , Token.nestedComments  = True
@@ -166,8 +166,16 @@ expression :: Parser Expr
 expression = buildExpressionParser operators term
 
 
+assignExpr :: Parser Expr
+assignExpr = do
+    varName <- identifier
+    reservedOp' "="
+    value <- expression
+    return $ Binary Asn (Var varName) value    
+
 term :: Parser Expr
 term =  parens expression
+    <|> try assignExpr
     <|> liftM Var identifier
     <|> liftM IntConst integer
     <|> liftM FloatConst float
@@ -194,10 +202,11 @@ statement' =  try assignStmt
 -- We treat assignment as a statement to avoid =/== errors in conditionals
 assignStmt :: Parser Stmt
 assignStmt = do
-    varName <- identifier
-    reservedOp' "="
-    value <- expression
-    return $ Assign (Var varName) value
+    --varName <- identifier
+    --reservedOp' "="
+    --value <- expression
+    assign <- assignExpr
+    return $ Assign assign
 
 ifStmt :: Parser Stmt
 ifStmt = do
@@ -245,6 +254,12 @@ forStmt = do
     stmt <- braces statement
     return $ For initial cond inc stmt
  
+--functionStmt :: Parser Stmt
+--functionStmt = do
+--    name <- identifier
+--    char '('
+    
+
 returnStmt :: Parser Stmt
 returnStmt = do
     reserved "return"
