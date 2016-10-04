@@ -47,6 +47,7 @@ data Expr = IntConst Integer   -- Think at this stage I want to allow it to be a
           | CharConst Char
           | Unary UnOp Expr
           | Binary BinOp Expr Expr
+          | Func String [Expr]  -- Eh, do I want string? ^^^
           deriving (Eq, Show)            
 ---------
 
@@ -61,6 +62,7 @@ data Stmt = Assign Expr  -- First Expr can only be a Var, not sure best way to e
           | While Expr Stmt
           | DoWhile Stmt Expr
           | For (Maybe Stmt) (Maybe Expr) (Maybe Stmt) Stmt 
+          | CallFunc Expr
           | Return Expr
           | Skip
           deriving (Eq, Show)
@@ -120,6 +122,7 @@ float         = Token.float         lexer
 charLiteral   = Token.charLiteral   lexer 
 stringLiteral = Token.stringLiteral lexer
 whiteSpace    = Token.whiteSpace    lexer
+commaSep      = Token.commaSep      lexer
 
 reservedOp' name = try (string name >> whiteSpace)
 
@@ -168,14 +171,21 @@ expression = buildExpressionParser operators term
 
 assignExpr :: Parser Expr
 assignExpr = do
-    varName <- identifier
+    name <- identifier
     reservedOp' "="
     value <- expression
-    return $ Binary Asn (Var varName) value    
+    return $ Binary Asn (Var name) value    
+
+callFuncExpr :: Parser Expr
+callFuncExpr = do
+    name <- identifier
+    args <- parens $ commaSep expression
+    return $ Func name args
 
 term :: Parser Expr
 term =  parens expression
     <|> try assignExpr
+    <|> try callFuncExpr
     <|> liftM Var identifier
     <|> liftM IntConst integer
     <|> liftM FloatConst float
@@ -198,13 +208,13 @@ statement' =  try assignStmt
           <|> whileStmt
           <|> doWhileStmt
           <|> forStmt
+          <|> try callFuncStmt
+          <|> try returnStmt
+          <|> try skipStmt
 
 -- We treat assignment as a statement to avoid =/== errors in conditionals
 assignStmt :: Parser Stmt
 assignStmt = do
-    --varName <- identifier
-    --reservedOp' "="
-    --value <- expression
     assign <- assignExpr
     return $ Assign assign
 
@@ -254,11 +264,11 @@ forStmt = do
     stmt <- braces statement
     return $ For initial cond inc stmt
  
---functionStmt :: Parser Stmt
---functionStmt = do
---    name <- identifier
---    char '('
-    
+
+callFuncStmt :: Parser Stmt
+callFuncStmt = do
+    callFunc <- callFuncExpr
+    return $ CallFunc callFunc
 
 returnStmt :: Parser Stmt
 returnStmt = do
