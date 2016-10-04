@@ -2,7 +2,9 @@ module Main where
 
 import System.IO
 import Control.Monad
-import Control.Applicative((<*))
+import Control.Applicative((<*>))
+import Control.Applicative((<$>))
+import Control.Applicative((<*))  -- Can I bundle these lines together?
 import Text.Parsec.Char
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Expr
@@ -55,7 +57,7 @@ data Expr = IntConst Integer   -- Think at this stage I want to allow it to be a
 --         deriving (Eq, Show)
 
 -- Gonna need separate declare??
-data Stmt = Assign Expr  -- First Expr can only be a Var, not sure best way to enforce ^^^
+data Stmt = Assign (Maybe String) Expr  -- Maybe String is the return type, second is the Asn Expr.  String should probably become a type thingy
           | Semi Stmt Stmt
           | If Expr Stmt
           | IfElse Expr Stmt Stmt
@@ -63,6 +65,7 @@ data Stmt = Assign Expr  -- First Expr can only be a Var, not sure best way to e
           | DoWhile Stmt Expr
           | For (Maybe Stmt) (Maybe Expr) (Maybe Stmt) Stmt 
           | CallFunc Expr
+          | DeclFunc String String [(String, Expr)] Stmt -- Strings ditto as Assign.  First is return type, second is function name.  Stmt array is array of (Type, variable)
           | Return Expr
           | Skip
           deriving (Eq, Show)
@@ -171,10 +174,10 @@ expression = buildExpressionParser operators term
 
 assignExpr :: Parser Expr
 assignExpr = do
-    name <- identifier
+    name <- identifier  -- I think I wanna write my own thing that returns an Expr
     reservedOp' "="
     value <- expression
-    return $ Binary Asn (Var name) value    
+    return $ Binary Asn (Var name) value    -- At the end of the day, might not want
 
 callFuncExpr :: Parser Expr
 callFuncExpr = do
@@ -194,10 +197,10 @@ term =  parens expression
 
 statement :: Parser Stmt
 statement =  parens statement
-         <|> sequenceOfStmt
+         <|> sequenceOfStmts
 
-sequenceOfStmt :: Parser Stmt 
-sequenceOfStmt = do 
+sequenceOfStmts :: Parser Stmt 
+sequenceOfStmts = do 
     list <- endBy1 statement' (oneOf "\n;")  -- Would prefer to apply the newline or semi parsers ^^^
     return $ foldr1 Semi list
 
@@ -210,13 +213,28 @@ statement' =  try assignStmt
           <|> forStmt
           <|> try callFuncStmt
           <|> try returnStmt
+          <|> try declFuncStmt
           <|> try skipStmt
 
+-- I guess this means that classes have to be at least two characters
+parseType :: Parser String 
+parseType = do
+    typeName <- do { first <- upper
+                   ; rest <- many alphaNum
+                   ; return (first:rest)
+                   }  -- Is this the best way to do this?
+                   <|> string "int"
+                   <|> string "byte"
+                   <|> string "float"  -- make this more stylish
+    whiteSpace  -- Maybe should be using lexeme?
+    return typeName
+
 -- We treat assignment as a statement to avoid =/== errors in conditionals
-assignStmt :: Parser Stmt
+assignStmt :: Parser Stmt  -- Right now, this doesn't allow int x;, should make an or
 assignStmt = do
+    varType <- optionMaybe parseType  -- Could be upper or lower case, so can't use identifier.  Should probably make a separate parser for primitive data types/class names
     assign <- assignExpr
-    return $ Assign assign
+    return $ Assign varType assign
 
 ifStmt :: Parser Stmt
 ifStmt = do
@@ -254,7 +272,7 @@ doWhileStmt = do
 forStmt :: Parser Stmt
 forStmt = do
     reserved "for"
-    char '('
+    char '('  -- could use do and parens
     initial <- optionMaybe assignStmt
     semi
     cond <- optionMaybe expression
@@ -269,6 +287,16 @@ callFuncStmt :: Parser Stmt
 callFuncStmt = do
     callFunc <- callFuncExpr
     return $ CallFunc callFunc
+
+-- Void not allowed as single argument to function.  By default, empty args means absolutely no args can be accepted in function calls, unlike C
+declFuncStmt :: Parser Stmt
+declFuncStmt = do
+    returnType <- parseType
+    name <- identifier
+    args <- parens $ commaSep $ (,) <$> parseType <*> expression  -- This line is black magic, it parses outside parentheses, and then a list of (type, expression), representing the type and values of arguments, separated by commas
+    stmts <- braces sequenceOfStmts  -- Must be at least one statement
+    return $ DeclFunc returnType name args stmts
+
 
 returnStmt :: Parser Stmt
 returnStmt = do
