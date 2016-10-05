@@ -13,7 +13,7 @@ import qualified Text.ParserCombinators.Parsec.Token as Token
 
 -- Need to add void type (or, if not declared in return type, void by default?)!
 
-main = putStrLn "Hello, World!"
+main = parseFile "test.ci" >>= putStrLn.show
 
 -- The operators will just be for primitive data types - the same will have to be defined within the language as interfaces for objects
 
@@ -49,6 +49,7 @@ data Expr = IntConst Integer   -- Think at this stage I want to allow it to be a
           | Var String
           | FloatConst Double
           | CharConst Char
+          | StringLiteral String
           | Unary UnOp Expr
           | Binary BinOp Expr Expr
           | Func String [Expr]  -- Eh, do I want string? ^^^
@@ -196,9 +197,8 @@ term =  parens expression
            ; return $ FloatConst flt
            }
     <|> liftM IntConst integer
-
-    -- liftM IntConst integer
-     -- <|> liftM CharConst char  
+    <|> liftM CharConst charLiteral  
+    <|> liftM StringLiteral stringLiteral
 
 
 statement :: Parser Stmt
@@ -207,7 +207,7 @@ statement =  parens statement
 
 sequenceOfStmts :: Parser Stmt 
 sequenceOfStmts = do 
-    list <- endBy1 statement' (whiteSpace >> (newline <|> char ';') >> whiteSpace)  -- Would prefer to apply the newline or semi parsers ^^^
+    list <- endBy1 statement' semi  -- Would prefer to apply the newline or semi parsers ^^^.  Actually, I should just do end of lines
     return $ foldr1 Semi list
 
 statement' :: Parser Stmt
@@ -331,5 +331,5 @@ parseFile :: String -> IO Stmt
 parseFile file =
   do program  <- readFile file
      case parse parser "" program of
-       Left e  -> print e >> fail "parse error"
+       Left e -> print e >> fail "parse error"
        Right r -> return r
