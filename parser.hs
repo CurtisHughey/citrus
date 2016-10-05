@@ -11,6 +11,8 @@ import Text.ParserCombinators.Parsec.Expr
 import Text.ParserCombinators.Parsec.Language
 import qualified Text.ParserCombinators.Parsec.Token as Token
 
+-- Need to add void type (or, if not declared in return type, void by default?)!
+
 main = putStrLn "Hello, World!"
 
 -- The operators will just be for primitive data types - the same will have to be defined within the language as interfaces for objects
@@ -65,7 +67,7 @@ data Stmt = Assign (Maybe String) Expr  -- Maybe String is the return type, seco
           | DoWhile Stmt Expr
           | For (Maybe Stmt) (Maybe Expr) (Maybe Stmt) Stmt 
           | CallFunc Expr
-          | DeclFunc String String [(String, Expr)] Stmt -- Strings ditto as Assign.  First is return type, second is function name.  Stmt array is array of (Type, variable)
+          | DeclFunc String String [(String, Expr)] Stmt -- Strings ditto as Assign.  First is return type, second is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
           | Return Expr
           | Skip
           deriving (Eq, Show)
@@ -190,8 +192,12 @@ term =  parens expression
     <|> try assignExpr
     <|> try callFuncExpr
     <|> liftM Var identifier
+    <|> do { flt <- try float    -- Frick, this is horrible             
+           ; return $ FloatConst flt
+           }
     <|> liftM IntConst integer
-    <|> liftM FloatConst float
+
+    -- liftM IntConst integer
      -- <|> liftM CharConst char  
 
 
@@ -201,20 +207,20 @@ statement =  parens statement
 
 sequenceOfStmts :: Parser Stmt 
 sequenceOfStmts = do 
-    list <- endBy1 statement' (oneOf "\n;")  -- Would prefer to apply the newline or semi parsers ^^^
+    list <- endBy1 statement' (whiteSpace >> (newline <|> char ';') >> whiteSpace)  -- Would prefer to apply the newline or semi parsers ^^^
     return $ foldr1 Semi list
 
 statement' :: Parser Stmt
 statement' =  try assignStmt
           <|> try ifElseStmt  -- Have to try this first, otherwise a full if statement would be parsed
-          <|> ifStmt  -- should switch, or at least use try (ambiguous start with assignStmt)
-          <|> whileStmt
-          <|> doWhileStmt
-          <|> forStmt
+          <|> try ifStmt  -- should switch, or at least use try (ambiguous start with assignStmt)
+          <|> try whileStmt
+          <|> try doWhileStmt
+          <|> try forStmt
           <|> try callFuncStmt
           <|> try returnStmt
           <|> try declFuncStmt
-          <|> try skipStmt
+          <|> skipStmt
 
 -- I guess this means that classes have to be at least two characters
 parseType :: Parser String 
@@ -223,9 +229,9 @@ parseType = do
                    ; rest <- many alphaNum
                    ; return (first:rest)
                    }  -- Is this the best way to do this?
-                   <|> string "int"
-                   <|> string "byte"
-                   <|> string "float"  -- make this more stylish
+                   <|> (try $ string "int")
+                   <|> (try $ string "byte")
+                   <|> (try $ string "float")  -- make this more stylish
     whiteSpace  -- Maybe should be using lexeme?
     return typeName
 
@@ -273,12 +279,14 @@ forStmt :: Parser Stmt
 forStmt = do
     reserved "for"
     char '('  -- could use do and parens
+    whiteSpace
     initial <- optionMaybe assignStmt
     semi
     cond <- optionMaybe expression
     semi
     inc <- optionMaybe statement'  -- statement' because it doesn't require semicolon at end.  Could make an argument for assignStmt, but what if you wanted to update with function?   
     char ')'
+    whiteSpace  -- This is a problem, char didn't parse?
     stmt <- braces statement
     return $ For initial cond inc stmt
  
@@ -318,3 +326,10 @@ parseString str =
     case parse parser "" str of
         Left e -> error $ show e
         Right r -> r
+
+parseFile :: String -> IO Stmt
+parseFile file =
+  do program  <- readFile file
+     case parse parser "" program of
+       Left e  -> print e >> fail "parse error"
+       Right r -> return r
