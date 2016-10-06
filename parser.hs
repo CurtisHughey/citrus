@@ -48,7 +48,7 @@ data BinOp = Add
 data Expr = IntConst Integer   -- Think at this stage I want to allow it to be arbitrary precision, will enforce later?
           | Var String
           | FloatConst Double
-          | CharConst Char
+          | ByteConst Char
           | StringLiteral String
           | Unary UnOp Expr
           | Binary BinOp Expr Expr
@@ -71,6 +71,13 @@ data Stmt = Assign (Maybe String) Expr  -- Maybe String is the return type, seco
           | DeclFunc String String [(String, Expr)] Stmt -- Strings ditto as Assign.  First is return type, second is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
           | Return Expr
           | Skip
+          deriving (Eq, Show)
+
+data Type = IntType
+          | FloatType
+          | ByteType
+          | VoidType
+          | ClassType String   -- Records the name of the class (alphanumeric_, first is capital)
           deriving (Eq, Show)
 
 
@@ -104,7 +111,7 @@ languageDef =
                                        , "import"
                                        , "int"
                                        , "float"
-                                       , "char"
+                                       , "byte"
                                        , "void"
                                        ]
              , Token.reservedOpNames = ["+", "-", "*", "/", "="  -- Need opStart/opLetter?  Missing any?
@@ -199,11 +206,9 @@ term =  parens expression
     <|> try assignExpr
     <|> try callFuncExpr
     <|> liftM Var identifier
-    <|> do { flt <- try float    -- Frick, this is horrible             
-           ; return $ FloatConst flt
-           }
+    <|> liftM FloatConst (try float)  -- Use try in case it's actually integer.  Changed, did I break something? ^^^
     <|> liftM IntConst integer
-    <|> liftM CharConst charLiteral  
+    <|> liftM ByteConst charLiteral  
     <|> liftM StringLiteral stringLiteral
 
 
@@ -230,21 +235,28 @@ statement' =  try assignStmt
 
 -- I guess this means that classes have to be at least two characters
 parseType :: Parser String 
-parseType = do
-    typeName <- do { first <- upper
-                   ; rest <- many alphaNum
-                   ; return (first:rest)
-                   }  -- Is this the best way to do this?
-                   <|> (try $ symbol "int")  -- Do these need to be trys?
-                   <|> (try $ symbol "byte")
-                   <|> (try $ symbol "float")  -- make this more stylish
-    whiteSpace  -- Maybe should be using lexeme?
-    return typeName
+parseType = (upper >>= \first -> (many alphaNum) >>= \rest -> return (first:rest))  -- Not sure it's worth doing this way, bit more compact.  Need to clean up
+            <|> (upper >>= (many alphaNum))
+            <|> (try $ symbol "int")  -- Do these need to be trys?
+            <|> (try $ symbol "byte")
+            <|> (try $ symbol "float")
+
+--parseType :: Parser Type 
+--parseType = do
+--    typeName <- do { first <- upper  -- Right now, not allowing underscore...
+--                   ; rest <- many alphaNum  -- Need to define a separate parser to identifier that parses class names... ^^^
+--                   ; return ClassType (first:rest)
+--                   }  -- Is this the best way to do this?
+--                   <|> (try $ symbol "int")  -- Do these need to be trys?
+--                   <|> (try $ symbol "byte")
+--                   <|> (try $ symbol "float")  -- make this more stylish
+--    whiteSpace  -- Maybe should be using lexeme?
+--    return typeName
 
 -- We treat assignment as a statement to avoid =/== errors in conditionals
 assignStmt :: Parser Stmt  -- Right now, this doesn't allow int x;, should make an or
 assignStmt = do
-    varType <- optionMaybe parseType  -- Could be upper or lower case, so can't use identifier.  Should probably make a separate parser for primitive data types/class names
+    varType <- optionMaybe parseType  -- Could be upper or lower case, so can't use identifier.  Should probably make a separate parser for primitive data types/class names.  Maaaayyyybe use modifyState to keep track of declared variables
     assign <- assignExpr
     return $ Assign varType assign
 
@@ -321,7 +333,6 @@ skipStmt :: Parser Stmt
 skipStmt = do
     reserved "skip"
     return Skip
-
 
 parser :: Parser Stmt
 parser = whiteSpace >> statement <* eof
