@@ -102,6 +102,10 @@ languageDef =
                                        , "null"
                                        , "typedef"  -- Probably going to need variadic...
                                        , "import"
+                                       , "int"
+                                       , "float"
+                                       , "char"
+                                       , "void"
                                        ]
              , Token.reservedOpNames = ["+", "-", "*", "/", "="  -- Need opStart/opLetter?  Missing any?
                                        , "&", "|", "^", "!", "~"
@@ -129,8 +133,10 @@ charLiteral   = Token.charLiteral   lexer
 stringLiteral = Token.stringLiteral lexer
 whiteSpace    = Token.whiteSpace    lexer
 commaSep      = Token.commaSep      lexer
+symbol        = Token.symbol        lexer
 
-reservedOp' name = try (string name >> whiteSpace)
+reservedOp' :: String -> GenParser Char st String
+reservedOp' = try.symbol
 
 -- Copied from http://en.cppreference.com/w/c/language/operator_precedence where relevant
 operators = [
@@ -229,9 +235,9 @@ parseType = do
                    ; rest <- many alphaNum
                    ; return (first:rest)
                    }  -- Is this the best way to do this?
-                   <|> (try $ string "int")
-                   <|> (try $ string "byte")
-                   <|> (try $ string "float")  -- make this more stylish
+                   <|> (try $ symbol "int")  -- Do these need to be trys?
+                   <|> (try $ symbol "byte")
+                   <|> (try $ symbol "float")  -- make this more stylish
     whiteSpace  -- Maybe should be using lexeme?
     return typeName
 
@@ -275,18 +281,17 @@ doWhileStmt = do
     semi  -- need ; after while statement, i guess
     return $ DoWhile stmt cond
 
+-- Should try to simplify ^^^
 forStmt :: Parser Stmt
 forStmt = do
     reserved "for"
-    char '('  -- could use do and parens
-    whiteSpace
+    symbol "("
     initial <- optionMaybe assignStmt
     semi
     cond <- optionMaybe expression
     semi
     inc <- optionMaybe statement'  -- statement' because it doesn't require semicolon at end.  Could make an argument for assignStmt, but what if you wanted to update with function?   
-    char ')'
-    whiteSpace  -- This is a problem, char didn't parse?
+    symbol ")"
     stmt <- braces statement
     return $ For initial cond inc stmt
  
@@ -299,7 +304,7 @@ callFuncStmt = do
 -- Void not allowed as single argument to function.  By default, empty args means absolutely no args can be accepted in function calls, unlike C
 declFuncStmt :: Parser Stmt
 declFuncStmt = do
-    returnType <- parseType
+    returnType <- symbol "void" <|> parseType 
     name <- identifier
     args <- parens $ commaSep $ (,) <$> parseType <*> expression  -- This line is black magic, it parses outside parentheses, and then a list of (type, expression), representing the type and values of arguments, separated by commas
     stmts <- braces sequenceOfStmts  -- Must be at least one statement
