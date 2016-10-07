@@ -59,8 +59,7 @@ data Expr = IntConst Integer   -- Think at this stage I want to allow it to be a
 --data Var = Var String  -- Eh
 --         deriving (Eq, Show)
 
--- Gonna need separate declare??
-data Stmt = Assign (Maybe String) Expr  -- Maybe String is the return type, second is the Asn Expr.  String should probably become a type thingy
+data Stmt = Assign (Maybe Type) Expr  -- Maybe Type is the return type, second is the Asn Expr.  String became a type thingy!
           | Semi Stmt Stmt
           | If Expr Stmt
           | IfElse Expr Stmt Stmt
@@ -68,7 +67,7 @@ data Stmt = Assign (Maybe String) Expr  -- Maybe String is the return type, seco
           | DoWhile Stmt Expr
           | For (Maybe Stmt) (Maybe Expr) (Maybe Stmt) Stmt 
           | CallFunc Expr
-          | DeclFunc String String [(String, Expr)] Stmt -- Strings ditto as Assign.  First is return type, second is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
+          | DeclFunc Type String [(Type, Expr)] Stmt -- First is return type, second is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
           | Return Expr
           | Skip
           deriving (Eq, Show)
@@ -180,8 +179,6 @@ operators = [
               , [ Infix (reservedOp' "^"  >> return (Binary AXor)) AssocLeft ]
 
               , [ Infix (reservedOp' "|"  >> return (Binary AOr)) AssocLeft ]
-
-              --, [ Infix (reservedOp "="  >>  return (Binary Asn)) AssocLeft ]
             ]
 
 expression :: Parser Expr
@@ -202,7 +199,7 @@ callFuncExpr = do
     return $ Func name args
 
 term :: Parser Expr
-term =  parens expression
+term =  parens term  -- I changed this from expression to term, it makes more sense?^^^
     <|> try assignExpr
     <|> try callFuncExpr
     <|> liftM Var identifier
@@ -233,28 +230,28 @@ statement' =  try assignStmt
           <|> try declFuncStmt
           <|> skipStmt
 
--- I guess this means that classes have to be at least two characters
-parseType :: Parser String 
-parseType = (upper >>= \first -> (many alphaNum) >>= \rest -> return (first:rest))  -- Not sure it's worth doing this way, bit more compact.  Need to clean up
-            <|> (upper >>= (many alphaNum))
-            <|> (try $ symbol "int")  -- Do these need to be trys?
-            <|> (try $ symbol "byte")
-            <|> (try $ symbol "float")
 
---parseType :: Parser Type 
---parseType = do
---    typeName <- do { first <- upper  -- Right now, not allowing underscore...
---                   ; rest <- many alphaNum  -- Need to define a separate parser to identifier that parses class names... ^^^
---                   ; return ClassType (first:rest)
---                   }  -- Is this the best way to do this?
---                   <|> (try $ symbol "int")  -- Do these need to be trys?
---                   <|> (try $ symbol "byte")
---                   <|> (try $ symbol "float")  -- make this more stylish
---    whiteSpace  -- Maybe should be using lexeme?
---    return typeName
+-- Not allowing _ right now.  Similar to identifier.  Should emulate lexeme parser
+parseClassIdentifier :: Parser String
+parseClassIdentifier = do
+    first <- upper
+    rest <- many alphaNum
+    whiteSpace
+    return (first:rest)
+
+-- I guess this means that classes have to be at least two characters  void?
+parseType :: Parser Type 
+parseType =  liftM ClassType parseClassIdentifier
+          <|> ((try $ symbol "int") >> (return IntType))  -- Do these need to be trys?
+          <|> ((try $ symbol "byte") >> (return ByteType))
+          <|> ((try $ symbol "float") >> (return FloatType))
+
+parseTypeWithVoid :: Parser Type
+parseTypeWithVoid =  parseType
+                 <|> ((try $ symbol "void") >> (return VoidType))
 
 -- We treat assignment as a statement to avoid =/== errors in conditionals
-assignStmt :: Parser Stmt  -- Right now, this doesn't allow int x;, should make an or
+assignStmt :: Parser Stmt  -- Right now, this doesn't allow int x;, should make an or ^^^
 assignStmt = do
     varType <- optionMaybe parseType  -- Could be upper or lower case, so can't use identifier.  Should probably make a separate parser for primitive data types/class names.  Maaaayyyybe use modifyState to keep track of declared variables
     assign <- assignExpr
@@ -316,12 +313,11 @@ callFuncStmt = do
 -- Void not allowed as single argument to function.  By default, empty args means absolutely no args can be accepted in function calls, unlike C
 declFuncStmt :: Parser Stmt
 declFuncStmt = do
-    returnType <- symbol "void" <|> parseType 
+    returnType <- parseTypeWithVoid
     name <- identifier
     args <- parens $ commaSep $ (,) <$> parseType <*> expression  -- This line is black magic, it parses outside parentheses, and then a list of (type, expression), representing the type and values of arguments, separated by commas
     stmts <- braces sequenceOfStmts  -- Must be at least one statement
     return $ DeclFunc returnType name args stmts
-
 
 returnStmt :: Parser Stmt
 returnStmt = do
