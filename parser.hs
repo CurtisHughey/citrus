@@ -56,9 +56,6 @@ data Expr = IntConst Integer   -- Think at this stage I want to allow it to be a
           deriving (Eq, Show)            
 ---------
 
---data Var = Var String  -- Eh
---         deriving (Eq, Show)
-
 data Stmt = Assign (Maybe Type) Expr  -- Maybe Type is the return type, second is the Asn Expr.  String became a type thingy!
           | Semi Stmt Stmt
           | If Expr Stmt
@@ -69,6 +66,7 @@ data Stmt = Assign (Maybe Type) Expr  -- Maybe Type is the return type, second i
           | CallFunc Expr
           | DeclFunc Type String [(Type, Expr)] Stmt -- First is return type, second is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
           | Return Expr
+          | Break
           | Skip
           deriving (Eq, Show)
 
@@ -77,6 +75,8 @@ data Type = IntType
           | ByteType
           | VoidType
           | ClassType String   -- Records the name of the class (alphanumeric_, first is capital)
+          | FuncType [Type] Type  -- Takes a list of types and returns a type.  Could also make the first thing a tuple, but then you would need extra parens...
+          | Tuple [Type]  -- Also todo.  Also need to add a parametric type
           deriving (Eq, Show)
 
 
@@ -94,20 +94,21 @@ languageDef =
                                        , "do"
                                        , "for"
                                        , "break"
-                                       , "skip"  -- continue
+                                       , "skip"
+                                       , "func"        -- Hmm, actually not using this.  Worth?  Might allow me to remove a couple of trys...
+                                       , "class"       -- Implement
+                                       , "new"         -- Implement
+                                       , "old"         -- Implement
+                                       , "interface"   -- Implement
+                                       , "implements"  -- Implement
+                                       , "is"          -- Implement
+                                       , "public"      -- Implement
+                                       , "private"     -- Implement
+                                       , "const"       -- Implement
                                        , "func"
-                                       , "class"
-                                       , "new"
-                                       , "old"
-                                       , "interface"
-                                       , "public"
-                                       , "private"
-                                       , "const"
-                                       , "func"
-                                       , "volatile"  -- might need^^^
-                                       , "null"
-                                       , "typedef"  -- Probably going to need variadic...
-                                       , "import"
+                                       , "volatile"    -- Implement
+                                       , "import"      -- Implement
+                                       , "null"        -- Implement
                                        , "int"
                                        , "float"
                                        , "byte"
@@ -118,6 +119,7 @@ languageDef =
                                   	   , ">>", "<<"
                                        , "<", ">", "<=", ">="                            
                                        , "&&", "||", "!"  -- Need wayyy more: http://www.tutorialspoint.com/cprogramming/c_operators.htm
+                                       , "->"  -- Bundling this in
                                        ]
              , caseSensitive         = True
              }
@@ -187,19 +189,19 @@ expression = buildExpressionParser operators term
 
 assignExpr :: Parser Expr
 assignExpr = do
-    name <- identifier  -- I think I wanna write my own thing that returns an Expr
+    name <- identifier <?> "asdfasf"  -- I think I wanna write my own thing that returns an Expr
     reservedOp' "="
     value <- expression
     return $ Binary Asn (Var name) value    -- At the end of the day, might not want
 
 callFuncExpr :: Parser Expr
 callFuncExpr = do
-    name <- identifier
+    name <- identifier 
     args <- parens $ commaSep expression
     return $ Func name args
 
 term :: Parser Expr
-term =  parens term  -- I changed this from expression to term, it makes more sense?^^^
+term =  try $ parens term  -- I changed this from expression to term, it makes more sense?^^^
     <|> try assignExpr
     <|> try callFuncExpr
     <|> liftM Var identifier
@@ -228,23 +230,33 @@ statement' =  try assignStmt
           <|> try callFuncStmt
           <|> try returnStmt
           <|> try declFuncStmt
+          <|> breakStmt
           <|> skipStmt
 
 
 -- Not allowing _ right now.  Similar to identifier.  Should emulate lexeme parser
-parseClassIdentifier :: Parser String
-parseClassIdentifier = do
+parseClassType :: Parser Type
+parseClassType = do
     first <- upper
     rest <- many alphaNum
     whiteSpace
-    return (first:rest)
+    return $ ClassType (first:rest)
+
+-- Used when declaring a function variable.  Functions are first-class objects, but we don't allow currying
+parseFuncType :: Parser Type  -- This parser isn't working... ^^^^
+parseFuncType = braces $ do { argTypes <- commaSep parseType  -- Do I want the parens?  Yes, to allow functions accepting functions
+                            ; reservedOp' "->"  -- Stealing a bit of Haskell.  Should I be using reservedOp'?
+                            ; returnType <- parseType
+                            ; return $ FuncType argTypes returnType
+                            }
 
 -- I guess this means that classes have to be at least two characters  void?
 parseType :: Parser Type 
-parseType =  liftM ClassType parseClassIdentifier
-          <|> ((try $ symbol "int") >> (return IntType))  -- Do these need to be trys?
-          <|> ((try $ symbol "byte") >> (return ByteType))
-          <|> ((try $ symbol "float") >> (return FloatType))
+parseType =  parseClassType
+         <|> parseFuncType
+         <|> ((try $ symbol "int") >> (return IntType))  -- Do these need to be trys?  Maybe not...
+         <|> ((try $ symbol "byte") >> (return ByteType))
+         <|> ((try $ symbol "float") >> (return FloatType))
 
 parseTypeWithVoid :: Parser Type
 parseTypeWithVoid =  parseType
@@ -254,7 +266,7 @@ parseTypeWithVoid =  parseType
 assignStmt :: Parser Stmt  -- Right now, this doesn't allow int x;, should make an or ^^^
 assignStmt = do
     varType <- optionMaybe parseType  -- Could be upper or lower case, so can't use identifier.  Should probably make a separate parser for primitive data types/class names.  Maaaayyyybe use modifyState to keep track of declared variables
-    assign <- assignExpr
+    assign <- try assignExpr  -- Might not need this try
     return $ Assign varType assign
 
 ifStmt :: Parser Stmt
@@ -325,10 +337,15 @@ returnStmt = do
     expr <- expression
     return $ Return expr
 
+breakStmt :: Parser Stmt
+breakStmt = do
+    reserved "break"
+    return Break
+
 skipStmt :: Parser Stmt
 skipStmt = do
-    reserved "skip"
-    return Skip
+    reserved "break"
+    return Break
 
 parser :: Parser Stmt
 parser = whiteSpace >> statement <* eof

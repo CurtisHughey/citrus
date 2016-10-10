@@ -1,0 +1,6 @@
+Make assigning a variable optional in the assignStmt
+Make a functionType a thing
+add in const, public, etc.
+class definition/instantiation
+interface definition/instantiation
+Tuples...
