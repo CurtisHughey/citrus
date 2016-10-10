@@ -1,6 +1,5 @@
 Make assigning a variable optional in the assignStmt
-Make a functionType a thing
 add in const, public, etc.
 class definition/instantiation
 interface definition/instantiation
-Tuples...
+Tuples...  Actually, I think I wanna put a pin on this right now

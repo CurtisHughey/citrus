@@ -190,8 +190,9 @@ expression = buildExpressionParser operators term
 assignExpr :: Parser Expr
 assignExpr = do
     name <- identifier <?> "asdfasf"  -- I think I wanna write my own thing that returns an Expr
+    -- value <- optionMaybe $ (reservedOp' "=" >> expression)
     reservedOp' "="
-    value <- expression
+    value <- expression    
     return $ Binary Asn (Var name) value    -- At the end of the day, might not want
 
 callFuncExpr :: Parser Expr
@@ -212,7 +213,7 @@ term =  try $ parens term  -- I changed this from expression to term, it makes m
 
 
 statement :: Parser Stmt
-statement =  parens statement
+statement =  parens statement  -- need the parens?
          <|> sequenceOfStmts
 
 sequenceOfStmts :: Parser Stmt 
@@ -262,11 +263,10 @@ parseTypeWithVoid :: Parser Type
 parseTypeWithVoid =  parseType
                  <|> ((try $ symbol "void") >> (return VoidType))
 
--- We treat assignment as a statement to avoid =/== errors in conditionals
-assignStmt :: Parser Stmt  -- Right now, this doesn't allow int x;, should make an or ^^^
+assignStmt :: Parser Stmt  -- Will either be in the form "int x = 1;" or "int x;".  In the former, a binary assignment expression is returned, in the former, just a Var
 assignStmt = do
-    varType <- optionMaybe parseType  -- Could be upper or lower case, so can't use identifier.  Should probably make a separate parser for primitive data types/class names.  Maaaayyyybe use modifyState to keep track of declared variables
-    assign <- try assignExpr  -- Might not need this try
+    varType <- optionMaybe parseType 
+    assign <- try assignExpr <|> liftM Var (try identifier >> semi)  -- Might not need this try ^^^  .  This allows us to either parse an assignment expression or just a variable declaration
     return $ Assign varType assign
 
 ifStmt :: Parser Stmt
