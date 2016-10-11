@@ -56,7 +56,7 @@ data Expr = IntConst Integer   -- Think at this stage I want to allow it to be a
           deriving (Eq, Show)            
 ---------
 
-data Stmt = Assign (Maybe Type) Expr  -- Maybe Type is the return type, second is the Asn Expr.  String became a type thingy!
+data Stmt = Assign (Maybe VarInfo) Expr  -- Maybe Type is the return type, second is the Asn Expr.  String became a type thingy!
           | Semi Stmt Stmt
           | If Expr Stmt
           | IfElse Expr Stmt Stmt
@@ -64,20 +64,27 @@ data Stmt = Assign (Maybe Type) Expr  -- Maybe Type is the return type, second i
           | DoWhile Stmt Expr
           | For (Maybe Stmt) (Maybe Expr) (Maybe Stmt) Stmt 
           | CallFunc Expr
-          | DeclFunc Type String [(Type, Expr)] Stmt -- First is return type, second is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
+          | DeclFunc VarType String [(VarInfo, Expr)] Stmt -- First is return type, second is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
           | Return Expr
           | Break
           | Skip
           deriving (Eq, Show)
 
-data Type = IntType
-          | FloatType
-          | ByteType
-          | VoidType
-          | ClassType String   -- Records the name of the class (alphanumeric_, first is capital)
-          | FuncType [Type] Type  -- Takes a list of types and returns a type.  Could also make the first thing a tuple, but then you would need extra parens...
-          | Tuple [Type]  -- Also todo.  Also need to add a parametric type
-          deriving (Eq, Show)
+data VarInfo = VarInfo Bool (Maybe AccessType) VarType  -- Bool is to indicate const.  Also add in volatile, which is easy.  Could make a default for AccessType, and not require it to be Maybe
+             deriving (Eq, Show)
+
+data AccessType = Public
+                | Private 
+                deriving (Eq, Show)
+
+data VarType = IntType
+             | FloatType
+             | ByteType
+             | VoidType
+             | ClassType String   -- Records the name of the class (alphanumeric_, first is capital)
+             | FuncType [VarType] VarType  -- Takes a list of types and returns a type.  Could also make the first thing a tuple, but then you would need extra parens...
+             -- | Tuple [Type]  -- Also todo.  Also need to add a parametric type
+             deriving (Eq, Show)
 
 
 languageDef =
@@ -190,9 +197,8 @@ expression = buildExpressionParser operators term
 assignExpr :: Parser Expr
 assignExpr = do
     name <- identifier <?> "asdfasf"  -- I think I wanna write my own thing that returns an Expr
-    -- value <- optionMaybe $ (reservedOp' "=" >> expression)
     reservedOp' "="
-    value <- expression    
+    value <- expression  -- Need to also do new object ^^^  
     return $ Binary Asn (Var name) value    -- At the end of the day, might not want
 
 callFuncExpr :: Parser Expr
@@ -236,7 +242,7 @@ statement' =  try assignStmt
 
 
 -- Not allowing _ right now.  Similar to identifier.  Should emulate lexeme parser
-parseClassType :: Parser Type
+parseClassType :: Parser VarType
 parseClassType = do
     first <- upper
     rest <- many alphaNum
@@ -244,30 +250,51 @@ parseClassType = do
     return $ ClassType (first:rest)
 
 -- Used when declaring a function variable.  Functions are first-class objects, but we don't allow currying
-parseFuncType :: Parser Type  -- This parser isn't working... ^^^^
-parseFuncType = braces $ do { argTypes <- commaSep parseType  -- Do I want the parens?  Yes, to allow functions accepting functions
+parseFuncType :: Parser VarType  
+parseFuncType = braces $ do { argTypes <- commaSep parseVarType  -- Do I want the parens?  Yes, to allow functions accepting functions
                             ; reservedOp' "->"  -- Stealing a bit of Haskell.  Should I be using reservedOp'?
-                            ; returnType <- parseType
+                            ; returnType <- parseVarType
                             ; return $ FuncType argTypes returnType
                             }
 
--- I guess this means that classes have to be at least two characters  void?
-parseType :: Parser Type 
-parseType =  parseClassType
-         <|> parseFuncType
-         <|> ((try $ symbol "int") >> (return IntType))  -- Do these need to be trys?  Maybe not...
-         <|> ((try $ symbol "byte") >> (return ByteType))
-         <|> ((try $ symbol "float") >> (return FloatType))
+-- I guess this means that classes have to be at least two characters
+-- Need to add in const, volatile, private, public.  Probably not static...
+parseVarType :: Parser VarType 
+parseVarType =  parseClassType
+            <|> parseFuncType
+            <|> (try $ symbol "int" >> return IntType)  -- Do these need to be trys?  Maybe not...
+            <|> (try $ symbol "byte" >> return ByteType)
+            <|> (try $ symbol "float" >> return FloatType)
 
-parseTypeWithVoid :: Parser Type
-parseTypeWithVoid =  parseType
-                 <|> ((try $ symbol "void") >> (return VoidType))
+parseTypeWithVoid :: Parser VarType
+parseTypeWithVoid =  parseVarType
+                 <|> (try $ symbol "void" >> return VoidType)
 
+parseConst :: Parser Bool
+parseConst =  (try $ reserved "const" >> return True)
+          <|> return False  -- Failure means that we are not const
+
+parseAccessType :: Parser AccessType  -- This is janky.  Could also default to public here...
+parseAccessType =  (try $ symbol "public" >> return Public)
+               <|> (try $ symbol "private" >> return Private)
+
+
+        -- liftM $ Public $ reserved "public"   -- Not what I want
+        --       <|> liftM $ Private $ reserved "private"
+
+parseVarInfo :: Parser VarInfo
+parseVarInfo = do
+    constType <- parseConst
+    accessType <- optionMaybe $ try parseAccessType  -- We need to do these tries, maybe not?
+    varType <- parseVarType
+    return $ VarInfo constType accessType varType
+
+-- This might need to be renamed since it isn't necessarily an assignment.  Maybe declarationStmt? ^^
 assignStmt :: Parser Stmt  -- Will either be in the form "int x = 1;" or "int x;".  In the former, a binary assignment expression is returned, in the former, just a Var
 assignStmt = do
-    varType <- optionMaybe parseType 
+    varInfo <- optionMaybe parseVarInfo 
     assign <- try assignExpr <|> liftM Var (try identifier >> semi)  -- Might not need this try ^^^  .  This allows us to either parse an assignment expression or just a variable declaration
-    return $ Assign varType assign
+    return $ Assign varInfo assign
 
 ifStmt :: Parser Stmt
 ifStmt = do
@@ -327,7 +354,7 @@ declFuncStmt :: Parser Stmt
 declFuncStmt = do
     returnType <- parseTypeWithVoid
     name <- identifier
-    args <- parens $ commaSep $ (,) <$> parseType <*> expression  -- This line is black magic, it parses outside parentheses, and then a list of (type, expression), representing the type and values of arguments, separated by commas
+    args <- parens $ commaSep $ (,) <$> parseVarInfo <*> expression  -- This line is black magic, it parses outside parentheses, and then a list of (type, expression), representing the type and values of arguments, separated by commas
     stmts <- braces sequenceOfStmts  -- Must be at least one statement
     return $ DeclFunc returnType name args stmts
 

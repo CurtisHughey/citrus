@@ -1,4 +1,3 @@
-Make assigning a variable optional in the assignStmt
 add in const, public, etc.
 class definition/instantiation
 interface definition/instantiation
