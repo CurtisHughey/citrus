@@ -224,7 +224,8 @@ statement =  parens statement  -- need the parens?
 
 sequenceOfStmts :: Parser Stmt 
 sequenceOfStmts = do 
-    list <- endBy1 statement' semi  -- Would prefer to apply the newline or semi parsers ^^^.  Actually, I should just do end of lines
+    -- list <- endBy1 statement' (newline )  -- Would prefer to apply the newline or semi parsers ^^^.  Actually, I should just do end of lines
+    list <- many  statement'  -- Wait, does this actually work???  Allows for stuff like x=2y=3, hmm
     return $ foldr1 Semi list
 
 statement' :: Parser Stmt
