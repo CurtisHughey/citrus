@@ -64,7 +64,7 @@ data Stmt = Assign (Maybe VarInfo) Expr  -- Maybe Type is the return type, secon
           | DoWhile Stmt Expr
           | For (Maybe Stmt) (Maybe Expr) (Maybe Stmt) Stmt 
           | CallFunc Expr
-          | DeclFunc VarType String [(VarInfo, Expr)] Stmt -- First is return type, second is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
+          | DeclFunc (Maybe AccessType) VarType String [(VarInfo, Expr)] Stmt -- First public/private is return type, third is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
           | Return Expr
           | Break
           | Skip
@@ -137,7 +137,7 @@ lexer = Token.makeTokenParser languageDef
 identifier    = Token.identifier    lexer
 reserved      = Token.reserved      lexer
 reservedOp    = Token.reservedOp    lexer
-semi          = Token.semi          lexer  -- ? do i want?
+semi          = Token.semi          lexer
 parens        = Token.parens        lexer
 brackets      = Token.brackets      lexer
 braces        = Token.braces        lexer
@@ -176,7 +176,7 @@ operators = [
                 , Infix (reservedOp' "<="  >> return (Binary Gte)) AssocLeft
                 , Infix (reservedOp' ">="  >> return (Binary Lte)) AssocLeft ]
 
-              , [ Infix (reservedOp' "=="  >> return (Binary Eq)) AssocLeft  -- Maybe right ^^^
+              , [ Infix (reservedOp' "=="  >> return (Binary Eq)) AssocLeft
                 , Infix (reservedOp' "!="  >> return (Binary Neq)) AssocLeft ]
 
               , [ Infix (reservedOp' "&"  >> return (Binary AAnd)) AssocLeft ]
@@ -279,10 +279,6 @@ parseAccessType :: Parser AccessType  -- This is janky.  Could also default to p
 parseAccessType =  (try $ symbol "public" >> return Public)
                <|> (try $ symbol "private" >> return Private)
 
-
-        -- liftM $ Public $ reserved "public"   -- Not what I want
-        --       <|> liftM $ Private $ reserved "private"
-
 parseVarInfo :: Parser VarInfo
 parseVarInfo = do
     constType <- parseConst
@@ -294,7 +290,8 @@ parseVarInfo = do
 assignStmt :: Parser Stmt  -- Will either be in the form "int x = 1;" or "int x;".  In the former, a binary assignment expression is returned, in the former, just a Var
 assignStmt = do
     varInfo <- optionMaybe parseVarInfo 
-    assign <- try assignExpr <|> liftM Var (try identifier >> semi)  -- Might not need this try ^^^  .  This allows us to either parse an assignment expression or just a variable declaration
+    assign <- try assignExpr <|> case varInfo of Just _  -> liftM Var $ try identifier  -- Might not need this try ^^^  .  This allows us to either parse an assignment expression or just a variable declaration
+                                                 Nothing -> fail "Variable as statement"   -- i.e. was just x on its own
     return $ Assign varInfo assign
 
 ifStmt :: Parser Stmt
@@ -353,11 +350,12 @@ callFuncStmt = do
 -- Void not allowed as single argument to function.  By default, empty args means absolutely no args can be accepted in function calls, unlike C
 declFuncStmt :: Parser Stmt
 declFuncStmt = do
+    accessType <- optionMaybe parseAccessType
     returnType <- parseTypeWithVoid
     name <- identifier
     args <- parens $ commaSep $ (,) <$> parseVarInfo <*> expression  -- This line is black magic, it parses outside parentheses, and then a list of (type, expression), representing the type and values of arguments, separated by commas
     stmts <- braces sequenceOfStmts  -- Must be at least one statement
-    return $ DeclFunc returnType name args stmts
+    return $ DeclFunc accessType returnType name args stmts
 
 returnStmt :: Parser Stmt
 returnStmt = do
