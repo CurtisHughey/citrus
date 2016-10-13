@@ -50,9 +50,11 @@ data Expr = IntConst Integer   -- Think at this stage I want to allow it to be a
           | FloatConst Double
           | ByteConst Char
           | StringLiteral String
+          | Null
           | Unary UnOp Expr
           | Binary BinOp Expr Expr
           | Func String [Expr]  -- Eh, do I want string? ^^^
+          | Constructor VarType [Expr]  -- VarType is ClassType. [Expr] is list of arguments to constructor
           deriving (Eq, Show)            
 ---------
 
@@ -64,13 +66,14 @@ data Stmt = Assign (Maybe VarInfo) Expr  -- Maybe Type is the return type, secon
           | DoWhile Stmt Expr
           | For (Maybe Stmt) (Maybe Expr) (Maybe Stmt) Stmt 
           | CallFunc Expr
-          | DeclFunc (Maybe AccessType) VarType String [(VarInfo, Expr)] Stmt -- First public/private is return type, third is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
+          | DeclFunc AccessType VarType String [(VarInfo, Expr)] Stmt -- First public/private is return type, third is function name.  Stmt array is array of (Type, variable).  Last is statements separated by semicolons
           | Return Expr
+          | Class AccessType VarType Stmt  -- Class name and list of statements (function and variable definitions)
           | Break
           | Skip
           deriving (Eq, Show)
 
-data VarInfo = VarInfo Bool (Maybe AccessType) VarType  -- Bool is to indicate const.  Also add in volatile, which is easy.  Could make a default for AccessType, and not require it to be Maybe
+data VarInfo = VarInfo Bool AccessType VarType  -- Bool is to indicate const.  Also add in volatile, which is easy.  Could make a default for AccessType, and not require it to be Maybe
              deriving (Eq, Show)
 
 data AccessType = Public
@@ -103,19 +106,19 @@ languageDef =
                                        , "break"
                                        , "skip"
                                        , "func"        -- Hmm, actually not using this.  Worth?  Might allow me to remove a couple of trys...
-                                       , "class"       -- Implement
-                                       , "new"         -- Implement
-                                       , "old"         -- Implement
+                                       , "class"     
+                                       , "new"        
+                                       --, "old"         -- Implement  I'm gonna make this a required function in objects (maybe if they implement something?)
                                        , "interface"   -- Implement
                                        , "implements"  -- Implement
                                        , "is"          -- Implement
-                                       , "public"      -- Implement
-                                       , "private"     -- Implement
-                                       , "const"       -- Implement
-                                       , "func"
+                                       , "public"      
+                                       , "private"     
+                                       , "const"       
+                                       , "func"        -- Actually, I don't have that right now, should I?
                                        , "volatile"    -- Implement
                                        , "import"      -- Implement
-                                       , "null"        -- Implement
+                                       , "null"    
                                        , "int"
                                        , "float"
                                        , "byte"
@@ -149,8 +152,9 @@ stringLiteral = Token.stringLiteral lexer
 whiteSpace    = Token.whiteSpace    lexer
 commaSep      = Token.commaSep      lexer
 symbol        = Token.symbol        lexer
+angles        = Token.angles        lexer
 
-reservedOp' :: String -> GenParser Char st String
+reservedOp' :: String -> GenParser Char st String  -- ^^^ weird def
 reservedOp' = try.symbol
 
 -- Copied from http://en.cppreference.com/w/c/language/operator_precedence where relevant
@@ -207,15 +211,24 @@ callFuncExpr = do
     args <- parens $ commaSep expression
     return $ Func name args
 
+parseConstructor :: Parser Expr
+parseConstructor = do
+    reserved "new"
+    classType <- parseClassType
+    args <- parens $ commaSep expression
+    return $ Constructor classType args    
+
 term :: Parser Expr
 term =  try $ parens term  -- I changed this from expression to term, it makes more sense?^^^
     <|> try assignExpr
     <|> try callFuncExpr
+    <|> try parseConstructor
     <|> liftM Var identifier
     <|> liftM FloatConst (try float)  -- Use try in case it's actually integer.  Changed, did I break something? ^^^
     <|> liftM IntConst integer
     <|> liftM ByteConst charLiteral  
     <|> liftM StringLiteral stringLiteral
+    <|> (reserved "null" >> return Null)
 
 
 statement :: Parser Stmt
@@ -238,13 +251,14 @@ statement' =  try assignStmt
           <|> try callFuncStmt
           <|> try returnStmt
           <|> try declFuncStmt
+          <|> try declClassStmt
           <|> breakStmt
           <|> skipStmt
 
 
 -- Not allowing _ right now.  Similar to identifier.  Should emulate lexeme parser
 parseClassType :: Parser VarType
-parseClassType = do
+parseClassType = do  -- Should it be parseClassName?
     first <- upper
     rest <- many alphaNum
     whiteSpace
@@ -284,7 +298,7 @@ parseVarInfo = do
     constType <- parseConst
     accessType <- optionMaybe $ try parseAccessType  -- We need to do these tries, maybe not?
     varType <- parseVarType
-    return $ VarInfo constType accessType varType
+    return $ VarInfo constType (maybe Public id accessType) varType
 
 -- This might need to be renamed since it isn't necessarily an assignment.  Maybe declarationStmt? ^^
 assignStmt :: Parser Stmt  -- Will either be in the form "int x = 1;" or "int x;".  In the former, a binary assignment expression is returned, in the former, just a Var
@@ -292,7 +306,7 @@ assignStmt = do
     varInfo <- optionMaybe parseVarInfo 
     assign <- try assignExpr <|> case varInfo of Just _  -> liftM Var $ try identifier  -- Might not need this try ^^^  .  This allows us to either parse an assignment expression or just a variable declaration
                                                  Nothing -> fail "Variable as statement"   -- i.e. was just x on its own
-    return $ Assign varInfo assign
+    return $ Assign varInfo assign  -- Can be of the form "int x = 2", "x=2", or "int x"
 
 ifStmt :: Parser Stmt
 ifStmt = do
@@ -317,7 +331,6 @@ whileStmt = do
     stmt <- braces statement
     return $ If cond stmt
 
-
 doWhileStmt :: Parser Stmt
 doWhileStmt = do
     reserved "do"
@@ -341,7 +354,6 @@ forStmt = do
     stmt <- braces statement
     return $ For initial cond inc stmt
  
-
 callFuncStmt :: Parser Stmt
 callFuncStmt = do
     callFunc <- callFuncExpr
@@ -355,7 +367,15 @@ declFuncStmt = do
     name <- identifier
     args <- parens $ commaSep $ (,) <$> parseVarInfo <*> expression  -- This line is black magic, it parses outside parentheses, and then a list of (type, expression), representing the type and values of arguments, separated by commas
     stmts <- braces sequenceOfStmts  -- Must be at least one statement
-    return $ DeclFunc accessType returnType name args stmts
+    return $ DeclFunc (maybe Public id accessType) returnType name args stmts
+
+declClassStmt :: Parser Stmt
+declClassStmt = do
+    accessType <- optionMaybe parseAccessType
+    reserved "class"
+    classType <- parseClassType
+    statements <- braces sequenceOfStmts  -- or statement?
+    return $ Class (maybe Public id accessType) classType statements   -- should allow for parametric polymorphism
 
 returnStmt :: Parser Stmt
 returnStmt = do
