@@ -269,33 +269,31 @@ parseClassType = do  -- Should it be parseClassName?
 parseFuncType :: Parser VarType  
 parseFuncType = braces $ do { argTypes <- commaSep parseVarType  -- Do I want the parens?  Yes, to allow functions accepting functions
                             ; reservedOp' "->"  -- Stealing a bit of Haskell.  Should I be using reservedOp'?
-                            ; returnType <- parseVarType
+                            ; returnType <- parseTypeWithVoid
                             ; return $ FuncType argTypes returnType
                             }
 
 -- I guess this means that classes have to be at least two characters
 -- Need to add in const, volatile, private, public.  Probably not static...
 parseVarType :: Parser VarType 
-parseVarType =  parseClassType
-            <|> parseFuncType
-            <|> (try $ string "int" >> (alphaNum <|> char '_') >>= fail "Parsed as undefined primitive")  -- I don't like this, it's hacky.  Necessary to prevent intx from getting parsed
-            <|> (try $ string "byte" >> (alphaNum <|> char '_') >>= fail "Parsed as undefined primitive")
-            <|> (try $ string "float" >> (alphaNum <|> char '_') >>= fail "Parsed as undefined primitive")
-            <|> (try $ symbol "int" >> return IntType)  -- Do these need to be trys?  Maybe not...
-            <|> (try $ symbol "byte" >> return ByteType)
-            <|> (try $ symbol "float" >> return FloatType)
+parseVarType  =  parseClassType
+             <|> parseFuncType
+             <|> (reserved "int" >> return IntType)  
+             <|> (reserved "byte" >>  return ByteType)
+             <|> (reserved "float" >> return FloatType)
 
 parseTypeWithVoid :: Parser VarType
 parseTypeWithVoid =  parseVarType
-                 <|> (try $ symbol "void" >> return VoidType)
+                 <|> (reserved "void" >> return VoidType)   -- Need check like above ^^^
+
 
 parseConst :: Parser Bool
 parseConst =  (try $ reserved "const" >> return True)
           <|> return False  -- Failure means that we are not const
 
 parseAccessType :: Parser AccessType  -- This is janky.  Could also default to public here...
-parseAccessType =  (try $ symbol "public" >> return Public)
-               <|> (try $ symbol "private" >> return Private)
+parseAccessType =  (reserved "public" >> return Public)  -- I have this construction a lot, maybe should make function...
+               <|> (reserved "private" >> return Private)
 
 parseVarInfo :: Parser VarInfo
 parseVarInfo = do
