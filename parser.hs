@@ -66,11 +66,11 @@ data Stmt = Assign (Maybe VarInfo) Expr  -- Maybe Type is the return type, secon
           | DoWhile Stmt Expr
           | For (Maybe Stmt) (Maybe Expr) (Maybe Stmt) Stmt 
           | CallFunc Expr
-          | DeclFuncHeader AccessType VarType String [(VarInfo, Expr)]  -- First public/private is return type, third is function name.  Stmt array is array of (Type, variable).
+          | DeclFuncHeader AccessType VarType String [(String,[VarType])] [(VarInfo, Expr)]  -- First public/private is return type, third is function name.  Stmt array is array of (Type, variable).
           | DeclFunc Stmt Stmt   -- First is DeclFuncHeader, second is list of stmts inside of function
           | Return Expr
-          | Class AccessType VarType Stmt  -- Class name and list of statements (function and variable definitions)
-          | Interface AccessType String [Stmt] -- String for name?.  List of Stmts is a list of DeclFuncs
+          | Class AccessType VarType [(String,[VarType])] [VarType] Stmt  -- public/private, name, interfaces it implements, and then statements inside of class (function and variable definitions)
+          | Interface AccessType VarType [Stmt] -- VarType is InterfaceType?.  List of Stmts is a list of DeclFuncs
           | Break
           | Skip
           deriving (Eq, Show)
@@ -87,6 +87,7 @@ data VarType = IntType
              | ByteType
              | VoidType
              | ClassType String   -- Records the name of the class (alphanumeric_, first is capital)
+             | InterfaceType String
              | FuncType [VarType] VarType  -- Takes a list of types and returns a type.  Could also make the first thing a tuple, but then you would need extra parens...
              -- | Tuple [Type]  -- Also todo.  Also need to add a parametric type
              deriving (Eq, Show)
@@ -152,6 +153,7 @@ charLiteral   = Token.charLiteral   lexer
 stringLiteral = Token.stringLiteral lexer
 whiteSpace    = Token.whiteSpace    lexer
 commaSep      = Token.commaSep      lexer
+commaSep1     = Token.commaSep1     lexer
 symbol        = Token.symbol        lexer
 angles        = Token.angles        lexer
 
@@ -243,6 +245,7 @@ sequenceOfStmts = do
 
 statement' :: Parser Stmt
 statement' =  try declInterfaceStmt  --Ugh, this ended up having to go first :(
+          <|> try declFuncStmt  -- And this had to go next
           <|> try assignStmt
           <|> try ifElseStmt  -- Have to try this first, otherwise a full if statement would be parsed
           <|> try ifStmt  -- should switch, or at least use try (ambiguous start with assignStmt)
@@ -251,7 +254,6 @@ statement' =  try declInterfaceStmt  --Ugh, this ended up having to go first :(
           <|> try forStmt
           <|> try callFuncStmt
           <|> try returnStmt   -- Probably can move down and remove try
-          <|> try declFuncStmt
           <|> try declClassStmt
           <|> breakStmt
           <|> skipStmt
@@ -298,16 +300,16 @@ parseAccessType =  (reserved "public" >> return Public)  -- I have this construc
 parseVarInfo :: Parser VarInfo
 parseVarInfo = do
     constType <- parseConst
-    accessType <- optionMaybe $ try parseAccessType  -- We need to do these tries, maybe not?
+    accessType <- option Public $ try parseAccessType  -- We need to do these tries, maybe not?
     varType <- parseVarType
-    return $ VarInfo constType (maybe Public id accessType) varType
+    return $ VarInfo constType accessType varType
 
 -- This might need to be renamed since it isn't necessarily an assignment.  Maybe declarationStmt? ^^
 assignStmt :: Parser Stmt  -- Will either be in the form "int x = 1;" or "int x;".  In the former, a binary assignment expression is returned, in the former, just a Var
 assignStmt = do
-    varInfo <- optionMaybe parseVarInfo 
+    varInfo <- try $ optionMaybe parseVarInfo 
     assign <- try assignExpr <|> case varInfo of Just _  -> liftM Var $ try identifier  -- Might not need this try ^^^  .  This allows us to either parse an assignment expression or just a variable declaration
-                                                 Nothing -> fail "Variable as statement"   -- i.e. was just x on its own
+                                                 Nothing -> fail "Variable as statement"   -- i.e. was just x on its own.  This isn't a great error
     return $ Assign varInfo assign  -- Can be of the form "int x = 2", "x=2", or "int x".  Problematically, also "intx"
 
 ifStmt :: Parser Stmt
@@ -361,13 +363,19 @@ callFuncStmt = do
     callFunc <- callFuncExpr
     return $ CallFunc callFunc
 
+-- Ugh, this is hard.  List of parametric variables, each of which can implement interfaces.  Angled braces surround it, then parentheses surround a parametric type implmenting 0 or more interfaces
+parseGenerics :: Parser [(String,[VarType])]
+parseGenerics = try $ angles $ commaSep1 $ parens $ (,) <$> identifier <*> (option [] $ reserved "implements" >> commaSep parseInterfaceType)
+
+
 declFuncHeaderStmt :: Parser Stmt
 declFuncHeaderStmt = do
-    accessType <- optionMaybe parseAccessType
+    accessType <- option Public parseAccessType
     returnType <- parseTypeWithVoid
     name <- identifier
+    generics <- option [] parseGenerics
     args <- parens $ commaSep $ (,) <$> parseVarInfo <*> expression  -- This line is black magic, it parses outside parentheses, and then a list of (type, expression), representing the type and values of arguments, separated by commas
-    return $ DeclFuncHeader (maybe Public id accessType) returnType name args
+    return $ DeclFuncHeader accessType returnType name generics args
 
 -- Void not allowed as single argument to function.  By default, empty args means absolutely no args can be accepted in function calls, unlike C
 declFuncStmt :: Parser Stmt
@@ -378,27 +386,29 @@ declFuncStmt = do
 
 declClassStmt :: Parser Stmt
 declClassStmt = do
-    accessType <- optionMaybe parseAccessType
+    accessType <- option Public parseAccessType
     reserved "class"
     classType <- parseClassType
+    generics <- option [] parseGenerics
+    implements <- option [] $ reserved "implements" >> commaSep parseInterfaceType
     statements <- braces sequenceOfStmts  -- or statement?
-    return $ Class (maybe Public id accessType) classType statements   -- should allow for parametric polymorphism
+    return $ Class accessType classType generics implements statements   -- should allow for parametric polymorphism
 
 -- Similar to parseClassType
-parseInterfaceName :: Parser String
-parseInterfaceName = do
+parseInterfaceType :: Parser VarType
+parseInterfaceType = do
     first <- upper
     rest <- many alphaNum
     whiteSpace
-    return $ (first:rest)
+    return $ InterfaceType (first:rest)
 
 declInterfaceStmt :: Parser Stmt  -- Not allowing any variables...
 declInterfaceStmt = do
-    accessType <- try $ optionMaybe parseAccessType
+    accessType <- try $ option Public parseAccessType
     reserved "interface"
-    interfaceName <- parseInterfaceName
+    interfaceType <- parseInterfaceType
     funcHeaders <- braces $ many declFuncHeaderStmt  -- Must be at least one function...
-    return $ Interface (maybe Public id accessType) interfaceName funcHeaders
+    return $ Interface accessType interfaceType funcHeaders
 
 returnStmt :: Parser Stmt
 returnStmt = do
