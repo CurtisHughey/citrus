@@ -54,7 +54,7 @@ data Expr = IntConst Integer   -- Think at this stage I want to allow it to be a
           | Unary UnOp Expr
           | Binary BinOp Expr Expr
           | Func String [Expr]  -- Eh, do I want string? ^^^
-          | Constructor VarType [Expr]  -- VarType is ClassType. [Expr] is list of arguments to constructor
+          | Constructor VarType [VarType] [Expr]  -- VarType is ClassType. [Expr] is list of arguments to constructor
           deriving (Eq, Show)            
 ---------
 
@@ -217,8 +217,9 @@ parseConstructor :: Parser Expr
 parseConstructor = do
     reserved "new"
     classType <- parseClassType
+    generics <- option [] $ angles $ commaSep parseClassType
     args <- parens $ commaSep expression
-    return $ Constructor classType args    
+    return $ Constructor classType generics args
 
 term :: Parser Expr
 term =  try $ parens term  -- I changed this from expression to term, it makes more sense?^^^
@@ -239,7 +240,7 @@ statement =  parens statement  -- need the parens?
 
 sequenceOfStmts :: Parser Stmt 
 sequenceOfStmts = do 
-    -- list <- endBy1 statement' (newline )  -- Would prefer to apply the newline or semi parsers ^^^.  Actually, I should just do end of lines
+    --list <- endBy1 statement' (newline )  -- Would prefer to apply the newline or semi parsers ^^^.  Actually, I should just do end of lines
     list <- many statement'  -- Wait, does this actually work???  Allows for stuff like x=2y=3, hmm
     return $ foldr1 Semi list
 
@@ -258,6 +259,10 @@ statement' =  try declInterfaceStmt  --Ugh, this ended up having to go first :(
           <|> breakStmt
           <|> skipStmt
 
+
+-- Ugh, this is hard.  List of parametric variables, each of which can implement interfaces.  Angled braces surround it, then parentheses surround a parametric type implmenting 0 or more interfaces
+parseGenerics :: Parser [(String,[VarType])]
+parseGenerics = try $ angles $ commaSep1 $ parens $ (,) <$> identifier <*> (option [] $ reserved "implements" >> commaSep parseInterfaceType)
 
 -- Not allowing _ right now.  Similar to identifier.  Should emulate lexeme parser
 parseClassType :: Parser VarType
@@ -362,10 +367,6 @@ callFuncStmt :: Parser Stmt
 callFuncStmt = do
     callFunc <- callFuncExpr
     return $ CallFunc callFunc
-
--- Ugh, this is hard.  List of parametric variables, each of which can implement interfaces.  Angled braces surround it, then parentheses surround a parametric type implmenting 0 or more interfaces
-parseGenerics :: Parser [(String,[VarType])]
-parseGenerics = try $ angles $ commaSep1 $ parens $ (,) <$> identifier <*> (option [] $ reserved "implements" >> commaSep parseInterfaceType)
 
 
 declFuncHeaderStmt :: Parser Stmt
