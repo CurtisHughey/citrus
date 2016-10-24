@@ -73,6 +73,7 @@ data Stmt = Assign (Maybe VarInfo) Expr  -- Maybe Type is the return type, secon
           | Interface AccessType VarType [Stmt] -- VarType is InterfaceType?.  List of Stmts is a list of DeclFuncs
           | Break
           | Skip
+          | Include [String]
           deriving (Eq, Show)
 
 data VarInfo = VarInfo Bool AccessType VarType  -- Bool is to indicate const.  Also add in volatile, which is easy.  Could make a default for AccessType, and not require it to be Maybe
@@ -111,15 +112,15 @@ languageDef =
                                        , "func"        -- Hmm, actually not using this.  Worth?  Might allow me to remove a couple of trys...
                                        , "class"     
                                        , "new"        
-                                       , "interface"   -- Implement
-                                       , "implements"  -- Implement
+                                       , "interface"
+                                       , "implements"
                                        , "is"          -- Implement
                                        , "public"      
                                        , "private"     
                                        , "const"       
                                        , "func"        -- Actually, I don't have that right now, should I?
                                        , "volatile"    -- Implement
-                                       , "import"      -- Implement
+                                       , "include"     -- Implement
                                        , "null"    
                                        , "int"
                                        , "float"
@@ -202,7 +203,7 @@ expression = buildExpressionParser operators term
 
 assignExpr :: Parser Expr
 assignExpr = do
-    name <- identifier <?> "asdfasf"  -- I think I wanna write my own thing that returns an Expr
+    name <- try identifier  -- I think I wanna write my own thing that returns an Expr
     reservedOp' "="
     value <- expression  -- Need to also do new object ^^^  
     return $ Binary Asn (Var name) value    -- At the end of the day, might not want
@@ -233,6 +234,15 @@ term =  try $ parens term  -- I changed this from expression to term, it makes m
     <|> liftM StringLiteral stringLiteral
     <|> (reserved "null" >> return Null)
 
+-- Statements that only appear at the top level of a file
+topLevelStmts :: Parser Stmt
+topLevelStmts = do 
+    stmts <- many $  try includeStmt 
+                 <|> try declFuncStmt
+                 <|> try assignStmt
+                 <|> try declClassStmt
+                 <|> try declInterfaceStmt
+    return $ foldr1 Semi stmts
 
 statement :: Parser Stmt
 statement =  parens statement  -- need the parens?
@@ -241,8 +251,8 @@ statement =  parens statement  -- need the parens?
 sequenceOfStmts :: Parser Stmt 
 sequenceOfStmts = do 
     --list <- endBy1 statement' (newline )  -- Would prefer to apply the newline or semi parsers ^^^.  Actually, I should just do end of lines
-    list <- many statement'  -- Wait, does this actually work???  Allows for stuff like x=2y=3, hmm
-    return $ foldr1 Semi list
+    stmts <- many statement'  -- Wait, does this actually work???  Allows for stuff like x=2y=3, hmm
+    return $ foldr1 Semi stmts
 
 statement' :: Parser Stmt
 statement' =  try declInterfaceStmt  --Ugh, this ended up having to go first :(
@@ -292,7 +302,6 @@ parseVarType  =  parseClassType
 parseTypeWithVoid :: Parser VarType
 parseTypeWithVoid =  parseVarType
                  <|> (reserved "void" >> return VoidType)   -- Need check like above ^^^
-
 
 parseConst :: Parser Bool
 parseConst =  (try $ reserved "const" >> return True)
@@ -368,7 +377,6 @@ callFuncStmt = do
     callFunc <- callFuncExpr
     return $ CallFunc callFunc
 
-
 declFuncHeaderStmt :: Parser Stmt
 declFuncHeaderStmt = do
     accessType <- option Public parseAccessType
@@ -427,8 +435,15 @@ skipStmt = do
     reserved "break"
     return Skip
 
+includeStmt :: Parser Stmt
+includeStmt = do
+    reserved "include"
+    path <- sepBy1 (many1 alphaNum) (char '.')
+    whiteSpace
+    return $ Include path
+
 parser :: Parser Stmt
-parser = whiteSpace >> statement <* eof
+parser = whiteSpace >> topLevelStmts <* eof
 
 parseString :: String -> Stmt
 parseString str = 
